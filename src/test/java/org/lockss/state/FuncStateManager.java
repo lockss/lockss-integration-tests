@@ -48,6 +48,7 @@ import static org.lockss.protocol.AgreementType.*;
 import org.lockss.test.*;
 import org.lockss.util.*;
 import org.lockss.util.time.TimerUtil;
+import org.lockss.util.time.TimeBase;
 
 /** 
  * Integration test for StateManagers.  Starts several clients performing
@@ -247,7 +248,7 @@ public abstract class FuncStateManager extends StateTestCase {
     return procs;
   }
 
-  /** Wait for a process to finiah, return its exit status */
+  /** Wait for a process to finish, return its exit status */
   int waitFor(Process proc) {
     try {
       int exitValue = proc.waitFor();
@@ -400,7 +401,7 @@ public abstract class FuncStateManager extends StateTestCase {
       if (collect(act, map)) {
 	send(Action.ClientReadyGo, MapUtil.map(JMS_MAP_AUIDS,
 					       ListUtil.list(makeAuid(AUID1),
-							     makeAuid(AUID1))));
+							     makeAuid(AUID2))));
       }
       break;
     }
@@ -460,11 +461,11 @@ public abstract class FuncStateManager extends StateTestCase {
    */
   @Test
   public void testDispatch() throws Exception {
-    Integer n = Integer.getInteger(SYSPROP_TEST_INSTANCE);
-    if (n == null) {
+    if (isMaster()) {
       setUpMaster();
       runMaster();
     } else {
+      Integer n = Integer.getInteger(SYSPROP_TEST_INSTANCE);
       testinst = n;
       Integer cnt = Integer.getInteger(SYSPROP_NUM_INSTANCES);
       if (cnt == null) {
@@ -567,6 +568,8 @@ public abstract class FuncStateManager extends StateTestCase {
       case 1: updateAus1(); updateAua1(); break;
       case 2: updateAus2(); updateAua2(); break;
       case 3: updateAus3(); break;
+      default: throw new IllegalArgumentException("Unknown client instance: "
+						  + testinst);
       }
     }
 
