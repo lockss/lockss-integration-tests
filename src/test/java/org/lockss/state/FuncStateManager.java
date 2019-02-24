@@ -128,8 +128,6 @@ public abstract class FuncStateManager extends StateTestCase {
 
   @After
   public void tearDown() throws Exception {
-    prod.closeConnection();
-    cons.closeConnection();
     daemon.stopManagers();
     super.tearDown();
   }
