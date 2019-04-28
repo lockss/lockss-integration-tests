@@ -51,19 +51,69 @@ import org.lockss.util.time.TimerUtil;
 import org.lockss.util.time.TimeBase;
 
 /** 
- * Integration test for StateManagers.  Starts several clients performing
- * state updates and assertions.  Requires ConfigService to be running.
- *
+ * Integration test for StateManagers and distributed state objects.
+ * Starts several clients performing state updates and checking that all
+ * clients see all updates.  Requires ConfigService to be running.
+ * <br>
  * To run all subtests:
- * mvn -o test -Dtest=FuncStateManager* -Dlogdir=target/surefire-reports -DtestForkCount=1 -Dloglevel=debug
- *
+ * <pre>mvn -o test -Dtest=FuncStateManager* -Dlogdir=target/surefire-reports -DtestForkCount=1</pre>
  * To run one subtest:
- * mvn -o test -Dtest=FuncStateManager*AuState1 -Dlogdir=target/surefire-reports -DtestForkCount=1 -Dloglevel=debug
+ * <pre>mvn -o test -Dtest=FuncStateManager*AuState1 -Dlogdir=target/surefire-reports -DtestForkCount=1</pre>
  *
- * testForkCount is currently required because JMS comm uses a fixed topic
- * name, making for a global comm channel.  Simultaneous tests result in
- * messages co-mingling.
-*/
+ * Optional:<br>
+
+ * <tt>-DupdateWait=5s</tt> <i>eg</i>, to cause the clients to wait 5
+ * seconds for state updates to be distributed before checking, instead of
+ * the default 2 seconds.
+ * <br>
+ * <tt>-Dloglevel=debug</tt> to change the log level for the master and all
+ * clients.
+ * <br><br>
+ * testForkCount=1 is currently required because the test uses a fixed JMS
+ * topic name, and the broker is global, so simultaneous tests will result
+ * in messages co-mingling.
+ * <br><br>
+ * Tips for diagnosing test failures:<ul>
+ *
+ * <li>The normal test output (in target/surefire-reports or on console) is
+ * only for the master.  The clients log into files in
+ * target/surefire-reports/clientlogs.</li>
+ *
+ * <li>Test failures usually manifest as one of:<ul>
+ *
+ * <li>One or more of the clients fails an assertion or throws.  Master
+ * will fail with a "Clients failed:" message listing the clients that
+ * failured.  See the corresponding client log(s) for the actual
+ * failure.</li>
+ *
+ * <li>One or more of the clients times out waiting for a message from
+ * master, and fails.  (Often this is caused by another client failing an
+ * assertion and exiting.)  Master will fail, but it will take a minute
+ * (stepTimeout).  See the client log(s).</li>
+ *
+ * <li>One or more of the clients hangs.  Currently master will also hang
+ * waiting for that process to exit.  This may be caused by a problem at a
+ * lower level, <i>eg</i>, at the JMS or REST layer.</li> </ul>
+ *
+ * <li>This is a very functional test.  A large amount of mechanism must
+ * work right for the assertions to pass, so assertion failure usually just
+ * means that something went wrong along the update path through
+ * XxxStateManager and to and from StateService.  Finding the problem
+ * usually requires tracing the flow of the objects:<ul>
+ *
+ * <li>Run ConfigService with debug2 logging. Run this test at debug2.</li>
+ *
+ * <li>Find the failing client logs, determine which kind of object causes
+ * the error.</li>
+ *
+ * <li>Trace the operations on that object in the ConfigService log first.
+ * Look for a cluster of REST GETs of the appropriate type (one or two for
+ * each client), then an update (PUT or PATCH).  Follow the update thread
+ * and it should send a JMS message.  Each client should log receipt of
+ * that message.</li>
+ *
+ * </ul> </ul>
+ */
 public abstract class FuncStateManager extends StateTestCase {
   static L4JLogger log = L4JLogger.getLogger();
 
@@ -78,6 +128,8 @@ public abstract class FuncStateManager extends StateTestCase {
   static final String SYSPROP_TEST_INSTANCE = "testinst";
   static final String SYSPROP_NUM_INSTANCES = "numinst";
   static final String SYSPROP_LOG_DIR = "logdir";
+  static final String SYSPROP_UPDATE_WAIT = "updateWait";
+  static final long DEFAULT_UPDATE_WAIT = 2000;
 
   String OUTER_CLASS_SHORT_NAME =
     StringUtil.truncateAtAny(StringUtil.shortName(this.getClass()), "$");
@@ -95,6 +147,7 @@ public abstract class FuncStateManager extends StateTestCase {
   int stepTimeout = (int)Constants.MINUTE;
   String gauid1;
   String gauid2;
+  long updateWait = DEFAULT_UPDATE_WAIT;
 
 
   @Before
@@ -106,6 +159,15 @@ public abstract class FuncStateManager extends StateTestCase {
       keeptempfiles = false;
     }
     loglevel = System.getProperty("loglevel", "");
+    String s = System.getProperty(SYSPROP_UPDATE_WAIT);
+    if (!StringUtil.isNullString(s)) {
+      try {
+	updateWait = StringUtil.parseTimeInterval(s);
+      } catch (Exception e) {
+	log.warn("Illegal updateWait: {}", s);
+	updateWait = DEFAULT_UPDATE_WAIT;
+      }
+    }
 
     System.setProperty(ConfigManager.SYSPROP_REST_CONFIG_SERVICE_URL,
 		       CFG_SVC_URL);
@@ -209,15 +271,18 @@ public abstract class FuncStateManager extends StateTestCase {
 		   // this one doesn't seem to work
 		   "-DreportsDirectory=" + uniqueName("surefire-reports", ix),
 		   
-		   // antrun has problems w/ multiple mvn invocations
+		   // antrun has problems w/ simultaneous mvn invocations
+		   // in the same project
 		   "-DskipEtags=true",
 		   "-DskipClasspathFiles=true",
 		   "-DskipBuildInfo=true",
 		   "-DskipDocker=true",
+		   "-DskipLocalPublishSite",
 
 		   "-Doutputtofile=false",
 		   "-Dkeeptempfiles=" + keeptempfiles,
 		   "-Dloglevel=" + loglevel,
+		   "-D" + SYSPROP_UPDATE_WAIT + "=" + updateWait,
 		   "-D" + SYSPROP_TEST_INSTANCE + "=" + ix,
 		   "-D" + SYSPROP_NUM_INSTANCES + "=" + numinst,
     };
@@ -297,6 +362,8 @@ public abstract class FuncStateManager extends StateTestCase {
   }
 
   Map waitForCommand(Action act) throws Exception {
+    log.debug2("Waiting for {}, timeout {}",
+	       act, StringUtil.timeIntervalToString(stepTimeout));
     Map map = (Map)cmdQueue.get(Deadline.in(stepTimeout));
     if (map == null) {
       fail("Timed out awaiting expected command: " + act);
@@ -549,23 +616,50 @@ public abstract class FuncStateManager extends StateTestCase {
   public static class AuState1 extends OneCycle {
     AuState aus1, aus2;
     AuAgreements aua1, aua2;
+    DatedPeerIdSet naps1, naps2;
+    AuSuspectUrlVersions asuv1, asuv2;
 
-    void doUpdates(Map map) {
+    void doUpdates(Map map) throws Exception {
       aus1 = stateMgr.getAuState(mau1);
       aus2 = stateMgr.getAuState(mau2);
-      aua1 = stateMgr.getAuAgreements(gauid1);
-      aua2 = stateMgr.getAuAgreements(gauid2);
       assertNotSame(aus1, aus2);
       assertSame(aus1, stateMgr.getAuState(mau1));
       assertSame(aus2, stateMgr.getAuState(mau2));
+
+      aua1 = stateMgr.getAuAgreements(gauid1);
+      aua2 = stateMgr.getAuAgreements(gauid2);
       assertNotSame(aua1, aua2);
       assertSame(aua1, stateMgr.getAuAgreements(gauid1));
       assertSame(aua2, stateMgr.getAuAgreements(gauid2));
       
+      naps1 = stateMgr.getNoAuPeerSet(gauid1);
+      naps2 = stateMgr.getNoAuPeerSet(gauid2);
+      assertNotSame(naps1, naps2);
+      assertSame(naps1, stateMgr.getNoAuPeerSet(gauid1));
+      assertSame(naps2, stateMgr.getNoAuPeerSet(gauid2));
+
+      asuv1 = stateMgr.getAuSuspectUrlVersions(gauid1);
+      asuv2 = stateMgr.getAuSuspectUrlVersions(gauid2);
+      assertNotSame(asuv1, asuv2);
+      assertSame(asuv1, stateMgr.getAuSuspectUrlVersions(gauid1));
+      assertSame(asuv2, stateMgr.getAuSuspectUrlVersions(gauid2));
+
       switch (testinst) {
-      case 1: updateAus1(); updateAua1(); break;
-      case 2: updateAus2(); updateAua2(); break;
-      case 3: updateAus3(); break;
+      case 1:
+	updateAus1();
+	updateAua1();
+	updateNoAuSet1();
+	updateSuspectVers1();
+	break;
+      case 2:
+	updateAus2();
+	updateAua2();
+	updateNoAuSet2();
+	break;
+      case 3:
+	updateSuspectVers2();
+	updateAus3();
+	break;
       default: throw new IllegalArgumentException("Unknown client instance: "
 						  + testinst);
       }
@@ -573,12 +667,16 @@ public abstract class FuncStateManager extends StateTestCase {
 
     void doAsserts(Map map) throws Exception {
       // XXX need a way to wait until all changes have propagated
-      TimerUtil.sleep(1000);
+      TimerUtil.sleep(updateWait);
       assertAus1();
       assertAus2();
       assertAus3();
       assertAua1();
       assertAua2();
+      assertNoAuSet1();
+      assertNoAuSet2();
+      assertSuspectVers1();
+      assertSuspectVers2();
     }
 
     void updateAus1() {
@@ -588,6 +686,7 @@ public abstract class FuncStateManager extends StateTestCase {
       TimeBase.step(2);
       aus1.newCrawlFinished(Crawler.STATUS_SUCCESSFUL, "result", -1);
       assertAus1();
+      TimeBase.setReal();
     }
 
     void assertAus1() {
@@ -605,6 +704,7 @@ public abstract class FuncStateManager extends StateTestCase {
       aus1.pollFinished(V3Poller.POLLER_STATUS_COMPLETE,
 			V3Poller.PollVariant.PoR);
       assertAus2();
+      TimeBase.setReal();
     }
 
     void assertAus2() {
@@ -685,6 +785,83 @@ public abstract class FuncStateManager extends StateTestCase {
       assertAgreeTime(.25f, 1910, aua2.findPeerAgreement(pid2, POP));
 
       assertSame(aua1, stateMgr.getAuAgreements(gauid1));
+    }
+
+    void updateNoAuSet1() throws IOException {
+      assertTrue(naps1.isEmpty());
+      assertEquals(-1, naps1.getDate());
+      naps1.add(pid0);
+      naps1.add(pid2);
+      naps1.setDate(123);
+      naps1.store();
+      assertNoAuSet1();
+    }
+
+    void assertNoAuSet1() {
+      assertFalse(naps1.isEmpty());
+      assertTrue(naps1.contains(pid0));
+      assertTrue(naps1.contains(pid2));
+      assertFalse(naps1.contains(pid1));
+      assertFalse(naps1.contains(pid3));
+      assertEquals(123, naps1.getDate());
+    }
+
+    void updateNoAuSet2() throws IOException {
+      assertTrue(naps2.isEmpty());
+      assertEquals(-1, naps2.getDate());
+      naps2.add(pid1);
+      naps2.add(pid3);
+      naps2.add(pid2);
+      naps2.setDate(10025);
+      naps2.store();
+      assertNoAuSet2();
+    }
+
+    void assertNoAuSet2() {
+      assertFalse(naps2.isEmpty());
+      assertTrue(naps2.contains(pid1));
+      assertTrue(naps2.contains(pid2));
+      assertTrue(naps2.contains(pid3));
+      assertFalse(naps2.contains(pid0));
+      assertEquals(10025, naps2.getDate());
+    }
+
+    void updateSuspectVers1()
+	throws IOException,
+	       org.lockss.util.SerializationException {
+      assertTrue(asuv1.isEmpty());
+      assertFalse(asuv1.isSuspect(URL1, 1));
+      assertFalse(asuv1.isSuspect(URL1, 2));
+      asuv1.markAsSuspect(URL1, 2, HASH1, HASH2);
+      AuUtil.saveSuspectUrlVersions(mau1, asuv1);
+      assertSuspectVers1();
+    }
+
+    void assertSuspectVers1() {
+      assertFalse(asuv1.isEmpty());
+      assertTrue(asuv1.isSuspect(URL1, 2));
+      assertFalse(asuv1.isSuspect(URL1, 1));
+      assertFalse(asuv1.isSuspect(URL2, 1));
+    }
+
+    void updateSuspectVers2()
+	throws IOException,
+	       org.lockss.util.SerializationException {
+      assertTrue(asuv2.isEmpty());
+      assertFalse(asuv2.isSuspect(URL1, 1));
+      assertFalse(asuv2.isSuspect(URL2, 2));
+      asuv2.markAsSuspect(URL1, 1, HASH1, HASH2);
+      asuv2.markAsSuspect(URL2, 2, HASH1, HASH2);
+      AuUtil.saveSuspectUrlVersions(mau2, asuv2);
+      assertFalse(asuv2.isEmpty());
+      assertSuspectVers2();
+    }
+
+    void assertSuspectVers2() {
+      assertFalse(asuv2.isEmpty());
+      assertTrue(asuv2.isSuspect(URL1, 1));
+      assertTrue(asuv2.isSuspect(URL2, 2));
+      assertFalse(asuv2.isSuspect(URL2, 1));
     }
 
   }
