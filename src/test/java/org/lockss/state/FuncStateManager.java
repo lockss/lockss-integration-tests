@@ -60,15 +60,17 @@ import org.lockss.util.time.TimeBase;
  * To run one subtest:
  * <pre>mvn -o test -Dtest=FuncStateManager*AuState1 -Dlogdir=target/surefire-reports -DtestForkCount=1</pre>
  *
- * Optional:<br>
-
- * <tt>-DupdateWait=5s</tt> <i>eg</i>, to cause the clients to wait 5
- * seconds for state updates to be distributed before checking, instead of
- * the default 2 seconds.
+ * Optional.  (Values shown are the default):<br>
+ * <tt>-DupdateWait=2s</tt> - amount of time the clients wait for state
+ * updates to be distributed before checking.</tt>
  * <br>
- * <tt>-Dloglevel=debug</tt> to change the log level for the master and all
- * clients.
+ * <tt>-Dloglevel=debug</tt> - log level for the master and all clients.</tt>
+ * <br>
+ * <tt>-DconfigUrl=http://localhost:24620</tt> - ConfigService URL.</tt>
+ * <br>
+ * <tt>-DbrokerUrl=tcp://localhost:61616</tt> - JMS broker URL.</tt>
  * <br><br>
+
  * testForkCount=1 is currently required because the test uses a fixed JMS
  * topic name, and the broker is global, so simultaneous tests will result
  * in messages co-mingling.
@@ -117,9 +119,6 @@ import org.lockss.util.time.TimeBase;
 public abstract class FuncStateManager extends StateTestCase {
   static L4JLogger log = L4JLogger.getLogger();
 
-  // XXX Need to parameterize
-  static final String CFG_SVC_URL = "http://localhost:24620";
-  static final String JMS_BROKER_URL = "tcp://localhost:61616";
 
 
   static final String JMS_TOPIC = "FuncStateManager";
@@ -128,6 +127,13 @@ public abstract class FuncStateManager extends StateTestCase {
   static final String SYSPROP_TEST_INSTANCE = "testinst";
   static final String SYSPROP_NUM_INSTANCES = "numinst";
   static final String SYSPROP_LOG_DIR = "logdir";
+
+  static final String SYSPROP_CONFIG_URL = "configUrl";
+  static final String DEFAULT_CONFIG_URL = "http://localhost:24620";
+
+  static final String SYSPROP_BROKER_URL = "brokerUrl";
+  static final String DEFAULT_BROKER_URL = "tcp://localhost:61616";
+
   static final String SYSPROP_UPDATE_WAIT = "updateWait";
   static final long DEFAULT_UPDATE_WAIT = 2000;
 
@@ -147,6 +153,8 @@ public abstract class FuncStateManager extends StateTestCase {
   int stepTimeout = (int)Constants.MINUTE;
   String gauid1;
   String gauid2;
+  String configUrl = DEFAULT_CONFIG_URL;
+  String brokerUrl = DEFAULT_BROKER_URL;
   long updateWait = DEFAULT_UPDATE_WAIT;
 
 
@@ -159,6 +167,8 @@ public abstract class FuncStateManager extends StateTestCase {
       keeptempfiles = false;
     }
     loglevel = System.getProperty("loglevel", "");
+    configUrl = System.getProperty(SYSPROP_CONFIG_URL, DEFAULT_CONFIG_URL);
+    brokerUrl = System.getProperty(SYSPROP_BROKER_URL, DEFAULT_BROKER_URL);
     String s = System.getProperty(SYSPROP_UPDATE_WAIT);
     if (!StringUtil.isNullString(s)) {
       try {
@@ -170,7 +180,7 @@ public abstract class FuncStateManager extends StateTestCase {
     }
 
     System.setProperty(ConfigManager.SYSPROP_REST_CONFIG_SERVICE_URL,
-		       CFG_SVC_URL);
+		       configUrl);
     super.setUp();
 
     daemon = getMockLockssDaemon();
@@ -223,7 +233,7 @@ public abstract class FuncStateManager extends StateTestCase {
 
   @Override
   protected void startManagers() {
-    ConfigurationUtil.addFromArgs(JMSManager.PARAM_BROKER_URI, JMS_BROKER_URL);
+    ConfigurationUtil.addFromArgs(JMSManager.PARAM_BROKER_URI, brokerUrl);
     daemon.startManagers(JMSManager.class);
     super.startManagers();
   }
@@ -277,7 +287,7 @@ public abstract class FuncStateManager extends StateTestCase {
 		   "-DskipClasspathFiles=true",
 		   "-DskipBuildInfo=true",
 		   "-DskipDocker=true",
-		   "-DskipLocalPublishSite",
+		   "-DskipLocalPublishSite=true",
 
 		   "-Doutputtofile=false",
 		   "-Dkeeptempfiles=" + keeptempfiles,
@@ -285,6 +295,8 @@ public abstract class FuncStateManager extends StateTestCase {
 		   "-D" + SYSPROP_UPDATE_WAIT + "=" + updateWait,
 		   "-D" + SYSPROP_TEST_INSTANCE + "=" + ix,
 		   "-D" + SYSPROP_NUM_INSTANCES + "=" + numinst,
+		   "-D" + SYSPROP_CONFIG_URL + "=" + configUrl,
+		   "-D" + SYSPROP_BROKER_URL + "=" + brokerUrl,
     };
     try {
       ProcessBuilder pb = new ProcessBuilder(command)
