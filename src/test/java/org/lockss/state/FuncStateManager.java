@@ -47,6 +47,7 @@ import org.lockss.protocol.*;
 import static org.lockss.protocol.AgreementType.*;
 import org.lockss.test.*;
 import org.lockss.util.*;
+import org.lockss.util.jms.*;
 import org.lockss.util.time.TimerUtil;
 import org.lockss.util.time.TimeBase;
 
@@ -142,8 +143,8 @@ public abstract class FuncStateManager extends StateTestCase {
 
 
   MockPlugin mplug;
-  Producer prod;
-  Consumer cons;
+  JmsProducer prod;
+  JmsConsumer cons;
 
   File logdir;
   int numinst;				// number of client instances
@@ -190,9 +191,10 @@ public abstract class FuncStateManager extends StateTestCase {
     mplug = new MockPlugin(daemon);
 
     try {
-      cons = Consumer.createTopicConsumer(null, JMS_TOPIC,
-					  new MyMessageListener("Test Listener"));
-      prod = Producer.createTopicProducer(null, JMS_TOPIC);
+      JmsFactory fact = JMSManager.getJmsFactoryStatic();
+      cons = fact.createTopicConsumer(null, JMS_TOPIC,
+				      new MyMessageListener("Test Listener"));
+      prod = fact.createTopicProducer(null, JMS_TOPIC);
     } catch (JMSException e) {
       fail("Couldn't create JMS producer or consumer.  Likely cause is that ConfigService is not running; it is required for this test.");
     }
@@ -507,7 +509,7 @@ public abstract class FuncStateManager extends StateTestCase {
 
   /** Listener for test client/master messages */
   private class MyMessageListener
-    extends Consumer.SubscriptionListener {
+    extends JmsConsumerImpl.SubscriptionListener {
 
     MyMessageListener(String listenerName) {
       super(listenerName);
@@ -516,7 +518,7 @@ public abstract class FuncStateManager extends StateTestCase {
     @Override
     public void onMessage(Message message) {
       try {
-        Object msgObject =  Consumer.convertMessage(message);
+        Object msgObject =  JmsUtil.convertMessage(message);
 	if (msgObject instanceof Map) {
 	  receiveMessage((Map)msgObject);
 	} else {
