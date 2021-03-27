@@ -47,6 +47,7 @@ import org.lockss.protocol.*;
 import static org.lockss.protocol.AgreementType.*;
 import org.lockss.test.*;
 import org.lockss.util.*;
+import org.lockss.util.io.FileUtil;
 import org.lockss.util.jms.*;
 import org.lockss.util.time.TimerUtil;
 import org.lockss.util.time.TimeBase;
