@@ -253,7 +253,7 @@ public abstract class FuncStateManager extends StateTestCase {
   /** Create a unique AUID */
   String makeAuid(String base) {
     return base + "-" +
-      org.apache.commons.lang3.RandomStringUtils.randomAlphabetic(8);
+      org.apache.commons.lang3.RandomStringUtils.insecure().randomAlphabetic(8);
   }
 
   boolean isMaster() {
