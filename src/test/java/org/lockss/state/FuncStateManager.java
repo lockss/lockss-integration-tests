@@ -57,6 +57,9 @@ import org.lockss.util.time.TimeBase;
  * Starts several clients performing state updates and checking that all
  * clients see all updates.  Requires ConfigService to be running.
  * <br>
+ * Note: currently ConfigService must be configured with
+ * org.lockss.restAuth.authenticationType=none
+ * <br>
  * To run all subtests:
  * <pre>mvn -o test -Dtest=FuncStateManager* -Dlogdir=target/surefire-reports -DtestForkCount=1</pre>
  * To run one subtest:
